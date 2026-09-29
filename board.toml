@@ -28,14 +28,18 @@
 #  this file and generates, from these numbers alone:
 #
 #    - $OUT_DIR/board_generated.rs  : Rust constants (rows/cols/pins/radio/IDs)
-#    - $OUT_DIR/vial.json           : the Vial definition (matrix dims + layout)
 #    - $OUT_DIR/config_generated.rs : the compressed Vial blob + keyboard ID
 #
-#  so the four things that used to have to agree by hand - the keymap array
-#  dimensions, the Gazell row/column packing, vial.json's "matrix" block and the
-#  USB descriptors - can no longer drift apart. Changing a matrix means editing
-#  THIS FILE (plus the keymap body in src/keymap.rs, whose dimensions are then
-#  type-checked against it by the compiler).
+#  The Vial grid is NOT generated: vial.json in the repository root is the
+#  definition, and build.rs CHECKS it against these numbers (matrix size, USB
+#  IDs, and every "row,col" cell) before compiling it in.
+#
+#  so the things that used to have to agree by hand - the keymap array
+#  dimensions, the Gazell row/column packing and the USB descriptors - can no
+#  longer drift apart, and the one file that still can is verified rather than
+#  trusted. Changing a matrix means editing THIS FILE (plus the keymap body in
+#  src/keymap.rs, whose dimensions the compiler then type-checks against it, plus
+#  vial.json's grid - which the check will name if you forget that one).
 #
 #  Everything is validated at build time; a bad value fails the build with a
 #  message instead of producing firmware that misbehaves over the air.

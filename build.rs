@@ -7,14 +7,21 @@
 //!
 //!   * `$OUT_DIR/board_generated.rs` - Rust constants for geometry, radio
 //!     parameters, USB IDs/strings and storage
-//!   * `$OUT_DIR/vial.json`          - the Vial definition, with its `matrix`
-//!     block and layout derived from the same numbers
 //!   * `$OUT_DIR/config_generated.rs`- the compressed Vial blob + keyboard ID
 //!
+//! The Vial definition is NOT generated. `vial.json` in the repository root IS
+//! the definition; this script reads it and CHECKS it against the numbers above
+//! before compressing it into the blob (see `load_vial_json`). That is a
+//! deliberate trade: the file can be loaded by Vial.app and the web editor
+//! without anyone building firmware, and it can express what geometry cannot
+//! (layer names, a shifted grid, an encoder) - at the price of being able to
+//! disagree with the firmware. The check buys back the guarantee.
+//!
 //! so the things that previously had to agree by hand (keymap array dimensions,
-//! the Gazell packing, vial.json's matrix block, the USB descriptors) cannot
-//! drift. Everything is validated here, so a bad number is a build error with a
-//! message rather than firmware that silently misbehaves over the air.
+//! the Gazell packing, the USB descriptors) cannot drift, and the one input that
+//! still can is verified rather than trusted. Everything is validated here, so a
+//! bad number is a build error with a message rather than firmware that silently
+//! misbehaves over the air.
 //!
 //! **2. Linker wiring** - copied from the working `keypoint-rmk-dongle` build:
 //! put `memory.x` where flip-link and the linker can find it, select
@@ -418,70 +425,132 @@ fn write_board_consts(out: &Path, b: &Board) {
     fs::write(out.join("board_generated.rs"), s).unwrap();
 }
 
-/// Emit the Vial definition, deriving the matrix block and the layout grid from
-/// the geometry so they cannot disagree with the firmware.
-fn write_vial_json(out: &Path, b: &Board) {
+/// Read the repository's vial.json and check it against the firmware's own
+/// geometry before any of it is compiled in.
+///
+/// This definition used to be GENERATED from board.toml, which made disagreement
+/// impossible by construction. A hand-written file buys two real things: Vial.app
+/// and the web editor can describe this keyboard WITHOUT anyone building firmware
+/// first, and the file can say what geometry cannot - the layer names, a shifted
+/// grid, an encoder. It loses the construction-time guarantee, so the guarantee
+/// comes back as a check.
+///
+/// Why the check is worth its length: Vial will happily write keycodes into
+/// whatever cells this file names. A cell the firmware never scans is a key that
+/// silently does nothing, and the failure looks like a broken switch.
+fn load_vial_json(b: &Board) -> String {
+    let manifest = env::var("CARGO_MANIFEST_DIR").expect("set by cargo");
+    let path = Path::new(&manifest).join("vial.json");
+    let raw = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "cannot read '{}': {e}\n\
+             vial.json is the Vial definition, and the source of the blob that\
+             Vial uses to recognise this keyboard. It is deliberately NOT generated:\n\
+             see the doc comment on load_vial_json in build.rs.",
+            path.display()
+        )
+    });
+    let v = json::parse(&raw).unwrap_or_else(|e| panic!("vial.json is not valid JSON: {e}"));
+
     let cols_total = b.cols_per_half * b.halves;
+    let mut problems: Vec<String> = Vec::new();
 
-    let mut rows = Vec::new();
-    for r in 0..b.rows_per_half {
-        let mut keys = Vec::new();
-        for c in 0..cols_total {
-            // Visual gap between the halves, the way the real board looks.
-            if c == b.cols_per_half {
-                keys.push("\n            {\n              \"x\": 0.5\n            }".to_string());
+    // Vial sizes its grid from the matrix block. Smaller than the firmware's and
+    // keys are unreachable in the editor; larger and the editor offers cells that
+    // can never be pressed.
+    let m = &v["matrix"];
+    need(&mut problems, m["rows"].as_u64() == Some(b.rows_per_half as u64),
+         format!("matrix.rows is {}, the firmware scans {} rows",
+                 m["rows"], b.rows_per_half));
+    need(&mut problems, m["cols"].as_u64() == Some(cols_total as u64),
+         format!("matrix.cols is {}, the firmware scans {} columns ({} per half x {} halves)",
+                 m["cols"], cols_total, b.cols_per_half, b.halves));
+
+    // Vial matches a definition to a device by product identity, and keys its
+    // saved layouts by name. A stale value here does not error - it shows a
+    // plausible but wrong layout, which is worse.
+    for (key, want) in [("vendorId", b.vid), ("productId", b.pid)] {
+        let got = v[key].as_str().unwrap_or("");
+        let ok = got.eq_ignore_ascii_case(&format!("0x{:04X}", want));
+        need(&mut problems, ok,
+             format!("{} is \"{}\", board.toml says 0x{:04X}", key, got, want));
+    }
+    need(&mut problems, v["name"].as_str() == Some(b.vial_name.as_str()),
+         format!("name is \"{}\", board.toml's vial_name is \"{}\"",
+                 v["name"].as_str().unwrap_or(""), b.vial_name));
+
+    // The grid: every (row, col) the firmware can report must appear exactly once,
+    // and nothing outside it may appear at all. {"x":0.5} style gap markers are
+    // layout decoration, not keys, so they are skipped rather than counted.
+    let grid = &v["layouts"]["keymap"];
+    let rows_n = b.rows_per_half as usize;
+    let cols_n = cols_total as usize;
+    let mut counts = vec![0usize; rows_n * cols_n];
+    let mut outside = 0usize;
+    if !grid.is_array() {
+        problems.push("layouts.keymap is missing or is not a list".to_string());
+    } else {
+        if grid.len() != rows_n {
+            problems.push(format!(
+                "layouts.keymap lists {} rows, the firmware scans {}", grid.len(), rows_n));
+        }
+        for r in 0..grid.len() {
+            let row = &grid[r];
+            if !row.is_array() {
+                outside += 1;
+                continue;
             }
-            keys.push(format!("\n            \"{r},{c}\""));
-        }
-        rows.push(format!("          [{} \n          ]", keys.join(",")));
-    }
-
-    let json = format!(
-        r#"{{
-    "name": {name},
-    "vendorId": "0x{vid:04X}",
-    "productId": "0x{pid:04X}",
-    "lighting": "none",
-    "matrix": {{
-        "rows": {rows},
-        "cols": {cols}
-    }},
-    "layouts": {{
-        "keymap": [
-{layout}
-        ]
-    }}
-}}
-"#,
-        name = serde_json_string(&b.vial_name),
-        vid = b.vid,
-        pid = b.pid,
-        rows = b.rows_per_half,
-        cols = cols_total,
-        layout = rows.join(",\n"),
-    );
-
-    fs::write(out.join("vial.json"), json).unwrap();
-}
-
-/// Minimal JSON string quoting (the `json` crate's stringify already handles the
-/// generated file later; this is only for the value we inject ourselves).
-fn serde_json_string(s: &str) -> String {
-    let mut o = String::from("\"");
-    for c in s.chars() {
-        match c {
-            '"' => o.push_str("\\\""),
-            '\\' => o.push_str("\\\\"),
-            '\n' => o.push_str("\\n"),
-            c => o.push(c),
+            for c in 0..row.len() {
+                let cell = &row[c];
+                // Gap markers and any other decoration carry no key position.
+                if !cell.is_string() {
+                    continue;
+                }
+                let s = cell.as_str().unwrap_or("");
+                let mut it = s.split(',');
+                let rr = it.next().and_then(|x| x.parse::<usize>().ok());
+                let cc = it.next().and_then(|x| x.parse::<usize>().ok());
+                match (rr, cc) {
+                    (Some(rr), Some(cc)) if rr < rows_n && cc < cols_n => {
+                        counts[rr * cols_n + cc] += 1
+                    }
+                    _ => outside += 1,
+                }
+            }
         }
     }
-    o.push('"');
-    o
+    let wrong: Vec<String> = counts
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| **n != 1)
+        .map(|(i, n)| format!("{},{} x{}", i / cols_n, i % cols_n, n))
+        .collect();
+    need(&mut problems, wrong.is_empty(),
+         format!("cells not present exactly once: {:?}", wrong));
+    need(&mut problems, outside == 0,
+         format!("{} cell(s) named that lie outside the scanned matrix", outside));
+
+    if !problems.is_empty() {
+        panic!(
+            "vial.json disagrees with board.toml:\n  - {}\n\
+             Reconcile the definition with the config it describes before building.",
+            problems.join("\n  - ")
+        );
+    }
+    raw
 }
+
+/// Append `what` to `problems` unless `cond` holds. A function rather than a
+/// closure so `problems` can still be read after the checks are written.
+fn need(problems: &mut Vec<String>, cond: bool, what: String) {
+    if !cond {
+        problems.push(what);
+    }
+}
+
 
 fn generate_vial_config(out: &Path, b: &Board) {
-    let vial_json = fs::read_to_string(out.join("vial.json")).unwrap();
+    let vial_json = load_vial_json(b);
     let vial_cfg = json::stringify(json::parse(&vial_json).unwrap());
 
     let mut compressed: Vec<u8> = Vec::new();
@@ -505,6 +574,12 @@ fn main() {
     println!("cargo:rerun-if-changed=board.toml");
     println!("cargo:rerun-if-changed=memory.x");
     println!("cargo:rerun-if-changed=build.rs");
+    // vial.json is a build INPUT now (it used to be written into OUT_DIR by this
+    // script), so it has to invalidate the script the way the other inputs do.
+    // Without this line, editing the Vial definition quietly does nothing until
+    // something else happens to rebuild - the kind of no-op that reads as
+    // "Vial ignored my change".
+    println!("cargo:rerun-if-changed=vial.json");
 
     let board = load_board();
 
@@ -582,7 +657,6 @@ fn main() {
     }
 
     write_board_consts(&out, &board);
-    write_vial_json(&out, &board);
     generate_vial_config(&out, &board);
 
     // ---- linker wiring (from the working keypoint-rmk-dongle build) ---------

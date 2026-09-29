@@ -33,7 +33,7 @@ Gazell host（中断里收包）
 
 ### 99% 的情况：**只改 `board.toml`**（唯一真源）
 
-`build.rs` 读它、校验它，然后生成 `memory.x`、`board_generated.rs`、`vial.json`、`config_generated.rs`。因此下面四件过去需要手工对齐的事——键位表维度、Gazell 行列打包、`vial.json` 的 matrix 段、USB 描述符——**不可能再互相漂移**。
+`build.rs` 读它、校验它，然后生成 `memory.x`、`board_generated.rs`、`config_generated.rs`。因此下面三件过去需要手工对齐的事——键位表维度、Gazell 行列打包、USB 描述符——**不可能再互相漂移**。（`vial.json` 是例外，见下一小节：它是手写的输入，由 `build.rs` 校验而不是生成。）
 
 | 你要做的事 | 改 `board.toml` 的哪一段 | 说明 |
 |---|---|---|
@@ -46,6 +46,19 @@ Gazell host（中断里收包）
 | 改键位 | **不用改代码**：在 Vial 里改；只有想改"出厂默认布局"时才动 `src/keymap.rs` | `src/keymap.rs` 的数组维度由 `board.toml` 推导，写错就是编译错误 |
 | 加层 | `src/keymap.rs` 的 `NUM_LAYER` | 层数是该数组的编译期属性，也是 RMK 报告给 Vial 的层数。现在是 **8**；新层默认整层 `Transparent`（不会改变任何行为，只提供容量） |
 | 加 combo / tap dance 上限 | **`keyboard.toml`** 的 `[rmk]`：`combo_max_num`、`morse_max_num` | 现在是 **32 / 32**。RMK 的 "tap dance" 就是它的 **morse**（同一套机制也做 tap-hold 与 home row mods）。这些是编译期容量，由 `rmk-types` 的构建脚本从 `KEYBOARD_TOML_PATH`（在 `.cargo/config.toml` 里指向本文件）读入；**没有这个文件时 RMK 静默用默认的 8 / 8** |
+
+### Vial 定义：仓库根的 `vial.json`（另一个真源）
+
+布局编辑器眼里"这块键盘长什么样"由它决定：矩阵行列、每格的 `row,col`、分体之间那个
+`{"x": 0.5}` 间隙，以及层名（`Base` / `Lower` / `Raise`）。它**不是** `build.rs` 生成的，
+这是有意的取舍：
+
+* 换来的是——Vial.app 和网页版不必先编译固件就能加载这块键盘；而且它能表达几何推不出来的东西（层名、错位网格、将来的编码器）。
+* 付出的是——它可能和 `board.toml` 说法不一致。所以 `build.rs` 在把它压进固件前先校验：`matrix` 行列、`vendorId`/`productId`/`name` 三个身份值、以及"每个 `row,col` 恰好出现一次、不许有越界格子"。写错不会静默：漏一格会直接报 `cells not present exactly once: ["3,11 x0"]`。
+
+改矩阵时**三处**要一起动：`board.toml`（形状，真源）、`src/keymap.rs`（数组维度由编译器类型检查）、`vial.json`（忘了会被校验点名）。
+
+**刷完新固件、键位却没变，多半不是 bug**：RMK 只在存储区为空时才写入编译期默认布局（`src/lib.rs` 把 keymap 交给 Storage，`storage/mod.rs` 仅在区域为空时填默认值）。凡是编辑过的板子，开机读回的是 **flash 里那份布局**，`src/keymap.rs` 整个被忽略。想让新默认生效，就在 Vial 里清一次布局（或临时把 `StorageConfig.clear_layout` 设 true 刷一遍，之后再改回 false）。
 
 ### 只有真正换板子才需要碰的代码
 
@@ -288,11 +301,12 @@ vendor/gzll/gzll_nrf52840_gcc.a
 | 文件 | 作用 |
 |---|---|
 | **`board.toml`** | **唯一真源**：芯片、内存布局、USB 标识、矩阵形状、Gazell 参数、存储区 |
-| `build.rs` | 读 `board.toml`（再深度合并 `BOARD_OVERRIDE`）→ 校验 → 生成 `memory.x` / `board_generated.rs` / `vial.json` / `config_generated.rs`，并链接 Gazell 库 |
+| **`vial.json`** | Vial 定义（矩阵行列、每格 `row,col`、分体间隙、层名）。手写，`build.rs` 编译前校验它与 `board.toml` 一致 |
+| `build.rs` | 读 `board.toml`（再深度合并 `BOARD_OVERRIDE`）→ 校验 → 生成 `memory.x` / `board_generated.rs` / `config_generated.rs`；**读并校验 `vial.json`**；链接 Gazell 库 |
 | `src/main.rs` | 时钟准备（HFXO 有界等待、停 LFCLK）+ 装配 RMK 与 UsbTransport |
 | `src/gazell.rs` | 射频：FFI、4 个回调、3 个中断向量跳转、中断级取包、矩阵合并、RMK 去抖 |
 | `src/board.rs` | 派生常量（行/列/掩码）+ 编译期不变量 |
-| `src/keymap.rs` | 出厂默认键位（实际布局由 Vial 拥有并存在 flash 里） |
+| `src/keymap.rs` | **出厂默认**键位（Base/Lower/Raise）。注意：板子被 Vial 编辑过后，开机读回的是 flash 里那份，本文件被忽略 |
 | `src/vial.rs` | 生成的 Vial 配置 |
 | `boards/*.toml` | **板型覆盖文件**（只写 `[chip]`/`[memory]`/`[flash]`/`[storage]`/`[power]` 里与 bootloader 有关的那几个键），用 `BOARD_OVERRIDE` 选择，由 `build.rs` 的 `merge_toml` 深度合并到 `board.toml` 上 |
 | `tools\build-variants.cmd` | 一键出三个板型全部产物（3×hex + 2×uf2），末尾自动跑校验 |
