@@ -77,6 +77,8 @@ jobs:
                            --output-path gazell-dongle-nicenano-52840.uf2 --family nrf52840
 
       - name: Build 52833-dk (PCA10100, no bootloader, SWD only)
+        env:
+          BOARD_OVERRIDE: boards/nrf52833-dongle.toml
         run: |
           cargo build --release --no-default-features --features nrf52833
           cargo objcopy --release --no-default-features --features nrf52833 \

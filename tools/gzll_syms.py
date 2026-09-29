@@ -13,7 +13,11 @@ import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 PATH = (sys.argv[1] if len(sys.argv) > 1 else
-        os.path.normpath(os.path.join(_HERE, "..", "reference", "gzll", "gzll_nrf52_gcc.a")))
+        # The archive this build actually links, vendored in the repository. It
+        # used to default to reference/gzll/, a directory that holds forensic
+        # copies and is git-ignored - so the script worked on the development
+        # machine and failed with FileNotFoundError in CI.
+        os.path.normpath(os.path.join(_HERE, "..", "vendor", "gzll", "gzll_nrf52840_gcc.a")))
 data = open(PATH, "rb").read()
 
 # ---- ar walk (same corrected logic as gzll_provenance) ----------------

@@ -12,7 +12,10 @@ import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 PATH = (sys.argv[1] if len(sys.argv) > 1 else
-        os.path.normpath(os.path.join(_HERE, "..", "reference", "gzll", "gzll_nrf52_gcc.a")))
+        # The vendored archive, not reference/gzll/: that directory is forensic
+        # copies and is git-ignored, so a clone has no such path. See
+        # vendor/gzll/README.md for where this file came from.
+        os.path.normpath(os.path.join(_HERE, "..", "vendor", "gzll", "gzll_nrf52840_gcc.a")))
 data = open(PATH, "rb").read()
 assert data[:8] == b"!<arch>\n", "not an ar archive"
 
