@@ -57,7 +57,7 @@ Gazell host（中断里收包）
 
 ## 3. 构建与烧录
 
-**四个板型一次出全，并逐产物校验：跑 `tools\build-variants.cmd`。** 日常就用这一条。
+**三个板型一次出全，并逐产物校验：跑 `tools\build-variants.cmd`。** 日常就用这一条。
 
 手工构建某一个板型（纯 cargo，无需脚本）：
 
@@ -88,7 +88,7 @@ Get-PnpDevice -PresentOnly | Where-Object InstanceId -match 'VID_1313' |
 
 `.github/workflows/build.yml` 在 push / PR / 手动触发时跑两个 job：
 
-* **`firmware`**：四个板型全部构建 + `tools/verify_variant.py` 产物级校验，成品作为 artifact 上传（仓库里不留二进制，见 `.gitignore`）。
+* **`firmware`**：三个板型全部构建 + `tools/verify_variant.py` 产物级校验，成品作为 artifact 上传（仓库里不留二进制，见 `.gitignore`）。
 * **`vendored-archive`**：纯 Python 解析仓库内那枚 Gazell 库，报告每成员的符号契约与出处指纹（成员集、内嵌源码路径、GCC 生产者串），并确认 `license.txt` 与二进制同行。
 
 CI 不需要任何私有资产：`rmk` 从官方仓库按 `rev` 取，Gazell 库在 `vendor/gzll/`，工具链由 `rust-toolchain.toml` 钉为 **1.98.1**（本机实测通过构建的版本，且产物里嵌的 rustc commit `48a229cea` 与它吻合）。唯一需要从 apt 装的是 `gcc-arm-none-eabi`——因为 `adafruit_bl` 会拉进 rmk 的 BLE/crypto 路径，`p256-cortex-m4-sys` 在构建时要调 C 编译器；本机等价物由 `tools\build-variants.cmd` 把 QMK_MSYS 加进 PATH 解决。
@@ -99,34 +99,27 @@ CI 不需要任何私有资产：`rmk` 从官方仓库按 `rev` 取，Gazell 库
 
 
 
-四个板型都能直接编译。**板型只描述"bootloader 和芯片占哪儿"，不是第二份 `board.toml`**：`build.rs` 从 `board.toml` 起步，再用 `BOARD_OVERRIDE` 指定的文件做深度合并（`merge_toml`）——覆盖文件里写了的键替换，没写的键继续从 `board.toml` 来。所以 `[matrix]`、`[gazell]`、`[device]` 和 Vial keyboard id 对四个板型是**同一份**，不会各抄一遍再各自漂移。
+三个板型都能直接编译。**板型只描述"bootloader 和芯片占哪儿"，不是第二份 `board.toml`**：`build.rs` 从 `board.toml` 起步，再用 `BOARD_OVERRIDE` 指定的文件做深度合并（`merge_toml`）——覆盖文件里写了的键替换，没写的键继续从 `board.toml` 来。所以 `[matrix]`、`[gazell]`、`[device]` 和 Vial keyboard id 对三个板型是**同一份**，不会各抄一遍再各自漂移。
 
 | 板子 | 覆盖文件（`BOARD_OVERRIDE`） | 产物 | 进 bootloader |
 |---|---|---|---|
-| PCA10059 dongle (52840) | 无（`board.toml` 本身即是） | `gazell-dongle-52840-dongle.hex` | 不用（SWD 烧录） |
-| nRF52833 DK (PCA10100) | `boards\nrf52833-dongle.toml` | `gazell-dongle-52833-dk.hex` | 板子没有 bootloader |
+| PCA10059 dongle (52840) | 无（`board.toml` 本身即是） | `gazell-dongle-52840-dongle.hex` | 不用（SWD / DFU 烧录） |
 | nice!nano (52840) | `boards\nice-nano-52840.toml` | `gazell-dongle-nicenano-52840.uf2`（+ 同名 .hex） | 双击 RST / 软件键 |
-| nice!nano (52833) | `boards\nice-nano-52833.toml` | `gazell-dongle-nicenano-52833.uf2`（+ 同名 .hex） | 双击 RST / 软件键 |
+| blue macro (52833) | `boards\blue-macro-52833.toml` | `gazell-dongle-blue-macro-52833.uf2`（+ 同名 .hex） | 双击 RST / 软件键 |
 
 52833 的板子必须加 `--no-default-features --features nrf52833`，而且要和覆盖文件里的 `[chip] name` 对上（`build.rs` 会校验）。
 
 > 覆盖文件**不能**当 `BOARD_TOML` 用。它们不含 `[matrix]`/`[gazell]`，被当成全量配置读会在 `build.rs` 里直接 panic——这是刻意的：宁可构建失败，也不要静默产出一份布局错误的固件。
 
-### nRF52833 DK（PCA10100）
+> **"blue macro" 是哪块板**：52833 上那块 UF2 板，bootloader 与外形都是 nice!nano 那一系（应用槽 `0x27000`、拖 `.uf2` 烧录），**在 keypoint-nmk 的 receiver 里同一块板的文件名叫 `nrf52833-nicenano`**——两个工程指的是同一块硬件，只是叫法不同。这里按使用者的叫法命名，避免"看文件名猜不到是哪块板"。
+>
+> 曾经还有一个 `52833-dk` 板型（PCA10100 开发板：自带 J-Link、**没有 bootloader**，应用从 `0x0` 开始、只能 SWD 烧），因为手上换成 blue macro 而移除；它的定义留在 git 历史（root commit `4d74c9c`），DK 若回来可以直接捞。"无 bootloader ⇒ 起点 `0x0`"这条规律本身仍记在 §4 末尾的 `flash_origin` 表里。
 
-开发板：自带 J-Link、**没有 bootloader**，所以应用从 `0x0` 开始，`reserved_top = 0x80000`（512K flash 用满：应用 448K 到 `0x70000`，存储区 `0x70000` + 16 个扇区 = 64K，正好顶到 flash 末尾——没有 bootloader 要保护，重新烧录靠 SWD）。烧录用板载 J-Link + nRF Connect Programmer。
-
-```powershell
-$env:BOARD_OVERRIDE = 'boards\nrf52833-dongle.toml'
-cargo build --release --no-default-features --features nrf52833
-cargo objcopy --release --no-default-features --features nrf52833 -- -O ihex gazell-dongle-52833-dk.hex
-```
-
-### nice!nano（52840 / 52833）
+### nice!nano 52840 / blue macro 52833
 
 芯片和 dongle 同类，差别全在 **Adafruit UF2 bootloader** 占用的低地址：
 
-| 项 | nice!nano 52840 | nice!nano 52833 |
+| 项 | nice!nano 52840 | blue macro 52833 |
 |---|---|---|
 | **应用槽起点** | **`0x1000`（RMK 布局）** | `0x27000`（ZMK 布局） |
 | `flash_length` | `636K`（到 storage 为止） | `260K`（到 storage 为止） |
@@ -145,14 +138,14 @@ cargo build --release
 cargo objcopy --release -- -O ihex gazell-dongle-nicenano-52840.hex
 python $UF2CONV gazell-dongle-nicenano-52840.hex -c -f 0xADA52840 -o gazell-dongle-nicenano-52840.uf2
 
-# nice!nano 52833（只有 feature 和 family id 不同）
-$env:BOARD_OVERRIDE = 'boards\nice-nano-52833.toml'
+# blue macro 52833（只有 feature 和 family id 不同）
+$env:BOARD_OVERRIDE = 'boards\blue-macro-52833.toml'
 cargo build --release --no-default-features --features nrf52833
-cargo objcopy --release --no-default-features --features nrf52833 -- -O ihex gazell-dongle-nicenano-52833.hex
-python $UF2CONV gazell-dongle-nicenano-52833.hex -c -f 0x621E937A -o gazell-dongle-nicenano-52833.uf2
+cargo objcopy --release --no-default-features --features nrf52833 -- -O ihex gazell-dongle-blue-macro-52833.hex
+python $UF2CONV gazell-dongle-blue-macro-52833.hex -c -f 0x621E937A -o gazell-dongle-blue-macro-52833.uf2
 ```
 
-日常不必手敲这些：`tools\build-variants.cmd` 一次做完四块板并校验。
+日常不必手敲这些：`tools\build-variants.cmd` 一次做完三块板并校验。
 
 要拖进 UF2 盘的是 `.uf2`。同名的 `.hex` **故意保留**：`tools\verify_variant.py` 要拿它和 uf2 对起点、对覆盖区间——一次转换把地址挪跑偏，产出的东西照样能"刷成功"然后不启动。
 
@@ -206,7 +199,7 @@ rmk = { path = "...", default-features = false, features = [
 
 **没有这个 feature 时它不会工作**——原因见 §7 第一条：按键会普通复位回固件，看起来就是"这个键没反应"。
 
-**注意 Nordic 系 bootloader 不认这个魔术值**：`adafruit_bl` 写的是 `0x57`（Adafruit UF2 的约定），而 Nordic DFU（PCA10059 那个 `0xE0000` 的 bootloader）认的是 `0xB1`。所以 **PCA10059 和 52833 DK 继续用 SWD + Programmer 烧录**，别指望软件进 DFU。
+**注意 Nordic 系 bootloader 不认这个魔术值**：`adafruit_bl` 写的是 `0x57`（Adafruit UF2 的约定），而 Nordic DFU（PCA10059 那个 `0xE0000` 的 bootloader）认的是 `0xB1`。所以 **PCA10059 继续用 SWD + Programmer 烧录**，别指望软件进 DFU。
 
 ### 每块新板子唯一"必须实测"的参数：`flash_origin`
 
@@ -215,9 +208,8 @@ rmk = { path = "...", default-features = false, features = [
 | 板子 | bootloader | 应用槽起点 |
 |---|---|---|
 | PCA10059 dongle (52840) | Nordic USB DFU | `0x1000` ← 已实测 |
-| nRF52833 DK (PCA10100) | 无（开发板） | `0x0` |
 | nice!nano 52840（这块） | Adafruit UF2 **0.6.0**，`SoftDevice: not found` | **`0x1000`（RMK 布局）** ← 已实测 |
-| nice!nano 52833（那块） | Adafruit UF2，预留 SoftDevice 区 | `0x27000`（ZMK 布局）← 已实测可刷 |
+| blue macro 52833（那块） | Adafruit UF2，预留 SoftDevice 区 | `0x27000`（ZMK 布局）← 已实测可刷 |
 | 裸片、无 bootloader | — | `0x0` |
 
 **同名的"nice!nano"可以是两种布局**，取决于出厂 bootloader 预留了多大的 SoftDevice 区——所以这两块板**不能互相抄参数**。判断方法就是读 U 盘里的 `INFO_UF2.TXT`（见上一节）。
@@ -303,7 +295,7 @@ vendor/gzll/gzll_nrf52840_gcc.a
 | `src/keymap.rs` | 出厂默认键位（实际布局由 Vial 拥有并存在 flash 里） |
 | `src/vial.rs` | 生成的 Vial 配置 |
 | `boards/*.toml` | **板型覆盖文件**（只写 `[chip]`/`[memory]`/`[flash]`/`[storage]`/`[power]` 里与 bootloader 有关的那几个键），用 `BOARD_OVERRIDE` 选择，由 `build.rs` 的 `merge_toml` 深度合并到 `board.toml` 上 |
-| `tools\build-variants.cmd` | 一键出四个板型全部产物（4×hex + 2×uf2），末尾自动跑校验 |
+| `tools\build-variants.cmd` | 一键出三个板型全部产物（3×hex + 2×uf2），末尾自动跑校验 |
 | `tools\verify_variant.py` | **按产物**校验四板型：起点/区间/是否压到 storage 或 bootloader、uf2 family、uf2 与 hex 是否同一镜像、该不同的镜像是否真的不同 |
 | `tools\hex_span.py` | 读 Intel HEX 的地址区间（type 02 与 04 都认）；分区百分比交给上面那个脚本，这里不假设某一块板的大小 |
 | `Cargo.toml` / `Cargo.lock` | 依赖与锁定版本 |

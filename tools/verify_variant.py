@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Verify the four board variants of the Planck Duos receiver, by PRODUCT.
+"""Verify the three board variants of the Planck Duos receiver, by PRODUCT.
 
 WHY THIS EXISTS
 ---------------
-The four variants differ ONLY in a layout that is generated at build time
+The three variants differ ONLY in a layout that is generated at build time
 (build.rs -> memory.x) and in which cargo chip feature is enabled. Neither is
 visible in the source you happen to be looking at, and getting either wrong
 produces an image that flashes successfully and then never runs - or, worse,
@@ -19,7 +19,7 @@ shows up as a failure instead of being quietly agreed with.
 
 WHAT IS CHECKED, per variant:
   * the .hex starts exactly at the application origin that board's bootloader
-    jumps to (0x1000 / 0x0 / 0x27000)
+    jumps to (0x1000 for the two UF2/DFU boards, 0x27000 for blue macro)
   * the application does not run past the end of its declared region
   * the application never reaches into the storage region (0xA0000 etc.)
   * the storage region never reaches into [flash] reserved_top
@@ -27,7 +27,7 @@ WHAT IS CHECKED, per variant:
     the wrong family, and nRF52840 and nRF52833 have different ones
   * the .uf2 starts at the same address as the .hex (same image, two formats)
   * images that MUST differ do differ: identical output means an override did
-    not take effect. All four layouts here are distinct, so all four images
+    not take effect. All three layouts here are distinct, so all three images
     must be distinct - which also catches the two nRF52840 boards being built
     from the same [storage] when only one of them was meant to change.
 
@@ -44,10 +44,9 @@ import sys
 
 # name,             origin,     app_len,      reserved_top, storage,   storage_kb, uf2 family
 VARIANTS = [
-    ("52840-dongle",   0x00001000, 636 * 1024, 0xE0000, 0xA0000,  24, None),
-    ("nicenano-52840", 0x00001000, 636 * 1024, 0xF4000, 0xA0000, 128, 0xADA52840),
-    ("52833-dk",       0x00000000, 448 * 1024, 0x80000, 0x70000,  64, None),
-    ("nicenano-52833", 0x00027000, 260 * 1024, 0x74000, 0x68000,  48, 0x621E937A),
+    ("52840-dongle",     0x00001000, 636 * 1024, 0xE0000, 0xA0000,  24, None),
+    ("nicenano-52840",   0x00001000, 636 * 1024, 0xF4000, 0xA0000, 128, 0xADA52840),
+    ("blue-macro-52833", 0x00027000, 260 * 1024, 0x74000, 0x68000,  48, 0x621E937A),
 ]
 
 PREFIX = "gazell-dongle-"

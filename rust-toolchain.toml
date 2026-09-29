@@ -6,10 +6,25 @@
 # flashed and tested from - exactly the comparison you do not want to be guessing
 # about when a keyboard behaves differently after a rebuild.
 #
-# 1.98.1 is the toolchain the four board variants in this repository were built
-# and flashed with; rustc's commit hash from it (48a229cea) is the one that
-# appears in the panic-location strings inside the produced images, which is how
-# the match was checked rather than assumed.
+# 1.98.1 is the compiler this repository's board variants were built and flashed
+# with; rustc's commit hash from it (48a229cea) is the one that appears in the
+# panic-location strings inside the produced images, which is how the match was
+# checked rather than assumed.
+#
+# One thing to know about pinning it, learned the hard way: on the development
+# machine the default toolchain was ALSO 1.98.1 (same rustc, same commit), yet
+# naming the version here still changed the bytes - by about 320 per image. The
+# reason is that rustc embeds the path of the toolchain directory that compiled
+# core, and "stable-x86_64-pc-windows-msvc" is two characters longer than
+# "1.98.1-x86_64-pc-windows-msvc". So pinning the version makes the compiler
+# reproducible, but it does NOT make an older artifact byte-identical, and a
+# hash comparison across the pin means nothing. Compare spans, start addresses
+# and the verify script's judgements instead.
+#
+# A pinned version is also a separate rustup install: `rustup target add
+# thumbv7em-none-eabihf --toolchain 1.98.1` is needed once per machine, because
+# the target installed under `stable` does not carry over, and without it the
+# build fails with E0463 "can't find crate for `core`".
 #
 # GitHub Actions reads this file via `rustup show`, so no workflow step has to
 # name a version and the two cannot drift apart.

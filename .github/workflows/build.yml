@@ -23,7 +23,7 @@ env:
 
 jobs:
   # ------------------------------------------------------------- firmware ------
-  # All four boards, from one source tree. Needs a C compiler for a reason that
+  # All three boards, from one source tree. Needs a C compiler for a reason that
   # is easy to miss: this receiver links rmk with `adafruit_bl` (the software
   # bootloader-jump feature), which pulls in rmk's BLE/crypto path, and
   # p256-cortex-m4-sys shells out to arm-none-eabi-gcc while it builds. Without
@@ -55,7 +55,7 @@ jobs:
           cargo install --locked cargo-hex-to-uf2@0.1.2
           cargo install --locked flip-link@0.1.12
 
-      # The four boards differ ONLY in bootloader/flash layout, which is a
+      # The three boards differ ONLY in bootloader/flash layout, which is a
       # boards/*.toml override merged onto board.toml by build.rs. The matrix
       # geometry, the radio parameters and the USB identity are inherited, so
       # they cannot drift between boards. This mirrors tools/build-variants.cmd
@@ -76,30 +76,22 @@ jobs:
           cargo hex-to-uf2 --input-path gazell-dongle-nicenano-52840.hex \
                            --output-path gazell-dongle-nicenano-52840.uf2 --family nrf52840
 
-      - name: Build 52833-dk (PCA10100, no bootloader, SWD only)
+      - name: Build blue-macro-52833 (the board the owner calls "blue macro")
         env:
-          BOARD_OVERRIDE: boards/nrf52833-dongle.toml
+          BOARD_OVERRIDE: boards/blue-macro-52833.toml
         run: |
           cargo build --release --no-default-features --features nrf52833
           cargo objcopy --release --no-default-features --features nrf52833 \
-                        -- -O ihex gazell-dongle-52833-dk.hex
-
-      - name: Build nicenano-52833
-        env:
-          BOARD_OVERRIDE: boards/nice-nano-52833.toml
-        run: |
-          cargo build --release --no-default-features --features nrf52833
-          cargo objcopy --release --no-default-features --features nrf52833 \
-                        -- -O ihex gazell-dongle-nicenano-52833.hex
-          cargo hex-to-uf2 --input-path gazell-dongle-nicenano-52833.hex \
-                           --output-path gazell-dongle-nicenano-52833.uf2 --family nrf52833
+                        -- -O ihex gazell-dongle-blue-macro-52833.hex
+          cargo hex-to-uf2 --input-path gazell-dongle-blue-macro-52833.hex \
+                           --output-path gazell-dongle-blue-macro-52833.uf2 --family nrf52833
 
       # Checks the products against the partition map each one claims: start
       # address, that the application never reaches storage, that storage never
       # reaches the bootloader, the UF2 family ID, that each UF2 and its own HEX
       # cover the same span, and - the assertion that catches a silent no-op
-      # override - that all four images really are distinct.
-      - name: Verify the four variants
+      # override - that all three images really are distinct.
+      - name: Verify the three variants
         run: python3 tools/verify_variant.py
 
       - name: Upload firmware

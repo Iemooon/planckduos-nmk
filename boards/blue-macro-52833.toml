@@ -1,5 +1,7 @@
 # =============================================================================
-#  Board variant: nice!nano on nRF52833 (Adafruit UF2 bootloader)
+#  Board variant: the nRF52833 board the owner calls "blue macro" - a
+#  nice!nano-shaped module with the Adafruit UF2 bootloader and the SoftDevice
+#  flash layout (the same board keypoint-nmk's receiver calls nrf52833-nicenano).
 #
 #  An OVERRIDE file, not a second copy of board.toml - see the header of
 #  boards\nice-nano-52840.toml for what that means and why. Everything about the
@@ -7,9 +9,13 @@
 #  keyboard ID all come from board.toml untouched.
 #
 #  Build it with:
-#      set BOARD_OVERRIDE=boards\nice-nano-52833.toml
+#      set BOARD_OVERRIDE=boards\blue-macro-52833.toml
 #      cargo build --release --no-default-features --features nrf52833
-#  or just run tools\build-variants.cmd, which does all four boards.
+#  or just run tools\build-variants.cmd, which does all three boards.
+#
+#  It used to be one of two nRF52833 profiles here: this one, and a PCA10100 DK
+#  (bare chip, 0x0, SWD only). The DK is gone because the hardware in use is this
+#  board; the profile is recoverable from git history if a DK ever comes back.
 # =============================================================================
 
 [chip]
@@ -23,10 +29,10 @@ name = "nrf52833"
 # bootloader, not on the chip:
 #   PCA10059 dongle, Nordic USB DFU bootloader : 0x00001000
 #   nice!nano 52840, Adafruit UF2, no SD       : 0x00001000
-#   nice!nano 52833 (this board), SD reserved  : 0x00027000  (measured)
+#   blue macro 52833 (this board), SD reserved : 0x00027000  (measured)
 #   bare chip / no bootloader                  : 0x00000000
 #
-# This is the one board of the four whose application slot is NOT at 0x1000, and
+# This is the one board of the three whose application slot is NOT at 0x1000, and
 # the one where a wrong value is invisible until the board does not boot.
 flash_origin = 0x00027000
 # 260K ends at 0x68000, leaving 48K of storage and the 48K bootloader region

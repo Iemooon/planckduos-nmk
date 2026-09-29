@@ -4,7 +4,7 @@ REM  Build the Planck Duos receiver for ALL FOUR boards, from one source tree.
 REM
 REM  Usage:  tools\build-variants.cmd        (run from anywhere; it cds itself)
 REM
-REM  The four boards:
+REM  The three boards:
 REM    52840-dongle    - the Nordic PCA10059 dongle. This is the board the
 REM                      receiver was developed on, and it gets NO board file:
 REM                      the root board.toml IS its layout, so a plain
@@ -13,10 +13,12 @@ REM                      Nordic USB DFU bootloader, app at 0x1000, flash it
 REM                      with nRF Connect Programmer.
 REM    nicenano-52840  - nice!nano, Adafruit UF2 bootloader (nosd), same 0x1000
 REM                      origin, flash by dragging the .uf2.
-REM    52833-dk        - PCA10100 / nRF52833 Dongle: no bootloader at all, so the
-REM                      app starts at 0x0 and it is flashed over SWD. No .uf2 is
-REM                      produced for it - a UF2 would be refused.
-REM    nicenano-52833  - nice!nano 52833, Adafruit UF2 bootloader, app at 0x27000.
+REM    blue-macro-52833 - the nRF52833 board the owner calls "blue macro", a
+REM                      nice!nano-shaped module with the Adafruit UF2
+REM                      bootloader: app at 0x27000, flash by dragging the .uf2.
+REM                      It replaced the PCA10100 DK profile, which had no
+REM                      bootloader (app at 0x0, SWD only) and is recoverable
+REM                      from git history if a DK ever comes back.
 REM
 REM  A board is a BUILD INPUT here, not a source edit: the variant names an
 REM  OVERRIDE file through BOARD_OVERRIDE, and build.rs deep-merges it onto
@@ -26,8 +28,8 @@ REM  directory). board.toml stays the single source of truth for the keyboard an
 REM  the link - the matrix, the channel table, the USB identity and the Vial ID
 REM  are inherited by every variant and cannot drift between them.
 REM
-REM  The build order groups the two nRF52840 boards and then the two nRF52833
-REM  boards, so cargo rebuilds the dependency graph twice rather than four times.
+REM  The build order groups the two nRF52840 boards and then the nRF52833 board,
+REM  so cargo rebuilds the dependency graph twice rather than three times.
 REM
 REM  Every product is verified afterwards by tools\verify_variant.py, which
 REM  checks each image against the partition map it claims - because a `set`
@@ -55,9 +57,7 @@ call :build 52840-dongle   ""                                     ""            
 if errorlevel 1 exit /b 1
 call :build nicenano-52840 "boards\nice-nano-52840.toml"         ""                                              nrf52840
 if errorlevel 1 exit /b 1
-call :build 52833-dk       "boards\nrf52833-dongle.toml"         "--no-default-features --features nrf52833"     ""
-if errorlevel 1 exit /b 1
-call :build nicenano-52833 "boards\nice-nano-52833.toml"         "--no-default-features --features nrf52833"     nrf52833
+call :build blue-macro-52833 "boards\blue-macro-52833.toml"       "--no-default-features --features nrf52833"     nrf52833
 if errorlevel 1 exit /b 1
 
 echo.
@@ -68,8 +68,7 @@ echo.
 echo   flash with:
 echo     gazell-dongle-52840-dongle.hex        nRF Connect Programmer (PCA10059 dongle)
 echo     gazell-dongle-nicenano-52840.uf2      drag onto the nice!nano 52840 UF2 drive
-echo     gazell-dongle-52833-dk.hex            SWD only - this board has no bootloader
-echo     gazell-dongle-nicenano-52833.uf2      drag onto the nice!nano 52833 UF2 drive
+echo     gazell-dongle-blue-macro-52833.uf2    drag onto the blue macro UF2 drive
 echo.
 echo   Do not erase all flash when flashing the two dongles: the USB DFU
 echo   bootloader at 0xE0000 is the only way back without a debug probe.
