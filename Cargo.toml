@@ -1,0 +1,165 @@
+[package]
+name = "gazell-dongle"
+version = "0.1.0"
+edition = "2024"
+description = "nRF52840 receiver: 2.4GHz Gazell matrix in, USB HID keyboard (with Vial) out - single chip, no BLE"
+
+# ---------------------------------------------------------------------------
+# Why this crate exists / why it looks like this
+#
+# Goal: one nRF52840 dongle that receives the halves' 4x6 matrices over Nordic
+# Gazell (2.4GHz, one-way) and presents itself to the host as a USB HID
+# keyboard, with Vial support.
+#
+# The USB half is deliberately NOT hand-written. `rmk::usb::UsbTransport` is the
+# stack that already enumerates correctly on this exact dongle (verified:
+# USB\VID_1313&PID_1208 with keyboard + mouse + Vial interfaces), so this crate
+# reuses it rather than re-deriving a working USB device stack.
+#
+# Layout and build flags are copied verbatim from the working
+# keypoint-rmk-dongle crate (memory.x, build.rs, .cargo/config.toml), which
+# rebuilds its shipped rmk-central.hex byte-for-byte:
+#     rmk-central.hex == a fresh `cargo build --release --bin central`
+#
+# BLE is dropped entirely: the link is one-way Gazell, and RADIO must be free
+# for Gazell rather than owned by MPSL/SoftDeviceController. The consequences,
+# handled in src/main.rs, are:
+#   * HFXO must be started by hand (MPSL used to do it) - and with a BOUNDED
+#     wait, because this application is entered by a jump from the bootloader,
+#     where HFXO may already be running and TASKS_HFCLKSTART then has no effect
+#     and raises no event.
+#   * The LFCLK the bootloader started must be stopped (and the stop waited
+#     out) before `embassy_nrf::init`, whose LFCLK start has no bounded wait.
+#   * Storage uses `embassy_nrf::nvmc::Nvmc` instead of MPSL's flash driver.
+# ---------------------------------------------------------------------------
+
+[dependencies]
+# Upstream rmk, pinned to an exact commit rather than a branch.
+#
+# A rev and not "main": the linked output of `rmk`'s macros depends on its
+# generated code, so a moving branch would make a firmware image untraceable to
+# the source that produced it, and CI on a runner would disagree with the build
+# on the development machine. Bumping it is a deliberate, reviewed change.
+#
+# The official repository and not a working copy of it: this receiver needs no
+# out-of-tree patch (the only local fork here existed for a BLE-centris-only
+# feature this crate never enabled), and a git dependency is what lets a fresh
+# clone - or GitHub Actions, which has never seen this machine - build at all.
+rmk = { git = "https://github.com/rmk-rs/rmk.git", rev = "f12257e8", default-features = false, features = [
+    "defmt",
+    "storage",
+    "vial",
+    # REQUIRED for Vial's unlock handshake, which the GUI runs before any
+    # physical-presence action (the "enter bootloader" button in particular).
+    #
+    # rmk/src/host/via/vial.rs answers UnlockStart(0x0E) / UnlockPoll(0x0F) /
+    # GetUnlockStatus(0x0D) only under `#[cfg(feature = "host_lock")]`; without
+    # it they just `error!("Vial lock feature is not enabled")` and write NO
+    # response, so the GUI polls forever, never sees "unlocked", and stays on its
+    # "press the unlock keys" dialog - which is unsatisfiable when no unlock keys
+    # are configured. The keycode path (0x7C00) bypasses all of that, which is
+    # why the key works while the GUI button does not.
+    #
+    # RMK's own `default` feature list includes `host_lock`; this crate uses
+    # `default-features = false`, so it has to be listed explicitly.
+    #
+    # `host_lock` does NOT reintroduce a lock: `VialConfig.insecure = true`
+    # (src/main.rs) makes `HostLock::is_unlocked()` return true unconditionally,
+    # and it also short-circuits the only other gate (the matrix-tester command).
+    # It only adds the matrix-state tracking the unlock protocol reports on.
+    "host_lock",
+    "watchdog",
+    # REQUIRED for the software "jump to bootloader" path (Vial keycode 0x7C00,
+    # VIA BootloaderJump, RMK's Action::Bootloader).
+    #
+    # rmk/src/boot.rs writes the bootloader magic only when one of
+    # adafruit_bl / rp2040 / zsa_voyager_bl is enabled. Without it the function
+    # falls through to warn!("Please specify a bootloader to jump to!") and a
+    # plain sys_reset, so the chip reboots straight back into this firmware and
+    # the bootloader is never entered - which looks like "the key does nothing".
+    #
+    # adafruit_bl writes 0x57 to POWER->GPREGRET then resets, which is what the
+    # Adafruit nRF52 UF2 bootloader on nice!nano (both 52840 and 52833) checks.
+    # ZMK's zmk,magic-boot-mode does the same thing on those boards.
+    #
+    # This is NOT the Nordic DFU magic: Nordic's bootloader (the PCA10059's
+    # 0xE0000 one; the nRF52833 DK has none) expects 0xB1 in GPREGRET and simply
+    # ignores 0x57. Those boards are flashed over SWD with nRF Connect Programmer
+    # rather than by a reset-to-DFU key, so that is fine.
+    #
+    # Cost: pulls in rmk's `_nrf_ble` (trouble-host, bt-hci). BLE is never
+    # initialised here, so this costs code size only, not RADIO - Gazell keeps
+    # RADIO/TIMER2/SWI0 exactly as before.
+    "adafruit_bl",
+] }
+
+cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
+cortex-m-rt = "0.7.5"
+embassy-time = { version = "0.5", features = ["tick-hz-32_768", "defmt"] }
+# The chip feature comes from [features] below, not from this list.
+embassy-nrf = { version = "0.11", features = [
+    "defmt",
+    "time-driver-rtc1",
+    "gpiote",
+    "unstable-pac",
+    "time",
+] }
+embassy-executor = { version = "0.10", features = [
+    "defmt",
+    "platform-cortex-m",
+    "executor-thread",
+] }
+defmt = "1"
+defmt-rtt = "1"
+panic-probe = { version = "1", features = ["print-defmt"] }
+
+# ---------------------------------------------------------------------------
+# Chip selection.
+#
+# Exactly one chip feature must be enabled; each just forwards to embassy-nrf,
+# which brings the matching nrf-pac. Nothing in this crate is chip specific
+# except the flash/RAM layout, and that lives in board.toml where build.rs
+# validates it against the selected chip.
+#
+# NOTE: RMK's own `*_ble` chip features are deliberately NOT used. This firmware
+# has no BLE, so it needs no RMK chip feature at all - which nRF52 you build for
+# is decided here and in board.toml, not by RMK.
+#
+# Chips WITHOUT a USB device controller cannot run this firmware at all (it is a
+# USB receiver): that rules out nRF52832 / nRF52811 / nRF52810. nRF52 parts with
+# USB: nRF52840, nRF52833, nRF52820.
+# ---------------------------------------------------------------------------
+[features]
+default = ["nrf52840"]
+nrf52840 = ["embassy-nrf/nrf52840"]
+nrf52833 = ["embassy-nrf/nrf52833"]
+nrf52820 = ["embassy-nrf/nrf52820"]
+
+[build-dependencies]
+xz2 = "0.1.7"
+json = "0.12"
+const-gen = "1.6"
+# board.toml parsing for build.rs. Chosen at 0.8 because that is the version the
+# local registry cache already holds (rmk-config pulls it), so offline builds work.
+toml = "0.8"
+
+[[bin]]
+name = "gazell-dongle"
+test = false
+bench = false
+
+[profile.dev]
+codegen-units = 1
+debug = true
+opt-level = 1
+overflow-checks = true
+lto = false
+panic = 'unwind'
+
+[profile.release]
+codegen-units = 1
+debug = true
+opt-level = "z"
+overflow-checks = false
+lto = "fat"
+

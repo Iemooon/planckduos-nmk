@@ -1,0 +1,262 @@
+# =============================================================================
+#  LIBRARY VERSION - the one thing that must not be taken for granted.
+#
+#  This firmware links the Gazell host library from nRF5 SDK 17.1.1, vendored in
+#  this repository so a clone needs no SDK checkout:
+#      vendor/gzll/gzll_nrf52840_gcc.a
+#  (override with the GZLL_DIR / GZLL_LIB environment variables, see build.rs;
+#  provenance and licence in vendor/gzll/README.md).
+#
+#  SDK 12.3's nRF52 build of the same library services the SECOND pipe
+#  unevenly - measured 150-299 packets/s on pipe 0 against 50-149 on pipe 1 -
+#  which appears as stutter on whichever half is not on pipe 0. It is not a
+#  configuration problem: every parameter, the packet pool, the fetch timing,
+#  the debouncing and the event pipeline were all cleared first, and none of it
+#  mattered because the library itself was the constant. SDK 17.1.1's
+#  nRF52840-specific build does not have the fault.
+#
+#  Before changing libraries, check the symbol contract with arm-none-eabi-nm:
+#  the library needs exactly memcpy, memset, nrf_gzll_host_rx_data_ready,
+#  nrf_gzll_device_tx_success, nrf_gzll_device_tx_failed and nrf_gzll_disabled
+#  from us, and defines TIMER2_IRQHandler / RADIO_IRQHandler /
+#  SWI0_EGU0_IRQHandler itself. Both SDK builds happen to agree.
+# =============================================================================
+# =============================================================================
+#  board.toml - THE single source of truth for this keyboard.
+#
+#  Everything that describes "which keyboard this is" lives here. build.rs reads
+#  this file and generates, from these numbers alone:
+#
+#    - $OUT_DIR/board_generated.rs  : Rust constants (rows/cols/pins/radio/IDs)
+#    - $OUT_DIR/vial.json           : the Vial definition (matrix dims + layout)
+#    - $OUT_DIR/config_generated.rs : the compressed Vial blob + keyboard ID
+#
+#  so the four things that used to have to agree by hand - the keymap array
+#  dimensions, the Gazell row/column packing, vial.json's "matrix" block and the
+#  USB descriptors - can no longer drift apart. Changing a matrix means editing
+#  THIS FILE (plus the keymap body in src/keymap.rs, whose dimensions are then
+#  type-checked against it by the compiler).
+#
+#  Everything is validated at build time; a bad value fails the build with a
+#  message instead of producing firmware that misbehaves over the air.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Chip and flash/RAM layout.
+#
+# build.rs GENERATES memory.x from this section, so supporting a new board does
+# not mean hand-editing a linker script - and a layout that cannot fit the chip,
+# or that overlaps storage, is a build error instead of a bricked board.
+# -----------------------------------------------------------------------------
+[chip]
+# Must match the Cargo feature you build with (default `nrf52840`); build.rs
+# cross-checks the two, and checks the sizes below against the chip's real
+# flash/RAM. Chips without USB (nrf52832/811/810) cannot run this firmware.
+name = "nrf52840"
+
+[memory]
+# flash_origin is the FIRST BYTE OF THE APPLICATION SLOT, which depends on the
+# bootloader, not on the chip:
+#   PCA10059 dongle, Nordic USB DFU bootloader : 0x00001000  (this file)
+#   nice!nano, Adafruit UF2 bootloader         : 0x00026000
+#   bare chip / no bootloader                  : 0x00000000
+flash_origin = 0x00001000
+flash_length = "636K"
+# On this dongle RAM starts 8 bytes in, as in the working RMK image.
+ram_origin = 0x20000008
+ram_length = "255K"
+
+# -----------------------------------------------------------------------------
+# USB identity of the board.
+# -----------------------------------------------------------------------------
+[device]
+# USB IDs and strings. Vial's definition uses the same vendor/product IDs, which
+# is the QMK/Vial convention and makes the board recognisable in Vial.app.
+vid = 0x1313
+pid = 0x4122
+manufacturer = "Lemon"
+# USB product string - visible from the host, so it both names the keyboard and
+# proves that a flash actually took effect.
+product_name = "Planck Duos RMK"
+# Name shown inside Vial.
+vial_name = "Planck Duos RMK"
+
+# Vial keyboard ID (8 bytes, hex). Vial.app identifies a keyboard by this, and
+# ties saved layouts (.vil) to it.
+#
+# Keep it CONSTANT for a given physical keyboard: a different ID makes Vial treat
+# the board as a different keyboard. If you ever want your layouts to load in a
+# board that has a different ID, this is the value to change - it is here, rather
+# than hardcoded in build.rs, precisely so that needs no code edit.
+vial_keyboard_id = "B9BC09B29D374CEA"
+
+# -----------------------------------------------------------------------------
+# Matrix geometry - the part that changes when you build a different keyboard.
+# -----------------------------------------------------------------------------
+[matrix]
+# Rows/columns of ONE half's matrix, as the transmitter sends them.
+# The transmitter sends one byte per row per half, so:
+#   * cols_per_half <= 8   (one bit per column, in a single byte)
+#   * rows_per_half <= 32  (Gazell's payload limit, one byte per row)
+# A 6-column half therefore has bits 6 and 7 unused; the host masks them off so
+# that future transmitters with more columns cannot leak stray bits into the
+# column range.
+rows_per_half = 4
+cols_per_half = 6
+# Number of halves feeding this receiver. Fixed at 2 (Gazell pipe 0 = left,
+# pipe 1 = right); the build fails on any other value.
+halves = 2
+
+# -----------------------------------------------------------------------------
+# 2.4GHz Gazell link. These MUST match the transmitters exactly - a wrong value
+# here looks exactly like "no link at all".
+# -----------------------------------------------------------------------------
+[gazell]
+# Channel table. The halves use complementary halves of one table, so what the
+# host listens on is their union. The earlier C receiver for this keyboard
+# carried three variants:
+#   1: [11, 23, 37, 49, 59, 73]
+#   2: [13, 27, 43, 53, 67, 77]   <- confirmed for these transmitters
+#   3: [15, 31, 47, 57, 71, 81]
+# Gazell allows at most 16 channels. (The value itself is set below, with a
+# note on why its ORDER is currently an experiment.)
+
+base_address_0 = 0x01020304
+base_address_1 = 0x05060708
+
+# Gazell identifies a device by a full on-air address: prefix byte + base
+# address. Pipe 0 has its own base address, while pipes 1..7 share base
+# address 1 and are told apart by their prefix byte alone - which is why a pipe
+# swap has to exchange the prefix bytes too, and why the diagnostics below read
+# the library's own prefix bytes instead of hardcoding a guess at them.
+
+# -----------------------------------------------------------------------------
+# Which host pipe serves the RIGHT half. The left half is fixed on pipe 0.
+#
+# Why this is configurable at all: measured on this hardware, the half served by
+# pipe 1 stutters while the same physical half is smooth on pipe 0 - verified by
+# swapping the two pipes' addresses, after which the stutter followed the pipe
+# and not the half. Both halves are silent until a key is pressed (they send no
+# idle packets), so every keystroke starts with the device re-acquiring the
+# host, and whatever makes pipe 1 slower to serve shows up directly as "the
+# character appears late" and "the keystroke is lost".
+#
+# Constraints, enforced by build.rs:
+#   * 1..=7 - pipe 0 is taken by the left half. Pipes 1..7 share base address 1,
+#     which is the right half's base address, so any of them works.
+#   * the right half's on-air address prefix is read from the library's own
+#     default for pipe 1 and written onto the chosen pipe, so no prefix value is
+#     hardcoded here.
+
+# DIAGNOSTIC: serve each half through the OTHER pipe.
+#
+# false: pipe 0 = left half, pipe 1 = right half (how the transmitters are built)
+# true : the two base addresses and the two prefix bytes are exchanged, and the
+#        firmware swaps which pipe it calls "left", so the USB output stays
+#        correct - but the RIGHT half is then served by pipe 0 and the left half
+#        by pipe 1.
+#
+# This exists to test one thing: whether the stutter follows the physical half or
+# the PIPE. Everything measured so far says it follows the pipe, which would mean
+# the half on pipe 0 is always the smooth one.
+
+# DIAGNOSTIC (temporary): make the firmware report, per half, which channel its
+# packets are actually arriving on, by tapping a key on the top row.
+#
+# There is no debug probe on this machine and defmt/RTT is unreadable without
+# one, so the USB keyboard this firmware already presents is the only channel
+# that can carry a measurement out of the chip.
+#
+# Why the channel: everything assumed about this link - that the halves use
+# complementary halves of the channel table and therefore cannot interfere with
+# each other - has never actually been measured. Which channels each half
+# occupies decides whether "the two devices contend for the host" is even
+# possible, so it is the first thing to pin down rather than assume.
+#
+# How to read it: every 3 s each half taps ONE key naming its channel index
+# (0..5, in the order of channel_table above):
+#   left half  -> F13 + index   (F13..F18)
+#   right half -> F19 + index   (F19..F24)
+# A half that sent nothing during the window taps nothing - which is itself the
+# answer to "is that half transmitting at all".
+#
+# Run:
+#     .\tools\measure_key_rate.ps1 -Seconds 60
+# while typing normally WITH BOTH HANDS, and report which F-keys appeared.
+
+# "250kbit" | "1mbit" | "2mbit"
+datarate = "1mbit"
+timeslot_period_us = 900
+
+# Timeslots the HOST stays on one channel before moving on.
+#
+# MUST stay 2. The original working receiver (redox-w-receiver-basic) never
+# calls nrf_gzll_set_timeslots_per_channel() at all, i.e. it runs on the SDK
+# default of 2, and the arithmetic says why that matters:
+#
+#   host rotation       = host table size * timeslots = 6 * 2 = 12 timeslots
+#   a half searching for the host dwells on one channel for
+#   timeslots_per_channel_when_device_out_of_skin (SDK default 15)
+#
+# 12 < 15, so a searching half ALWAYS meets the host before moving on. At 4 the
+# rotation would be 24 timeslots, twice the dwell, and a half coming back from
+# silence would usually give up on a channel before the host got there - the
+# re-acquisition that is felt as "the character arrives late", and, when the
+# attempt is lost, as "the character is missing".
+#
+# The transmitters each hold only half of this table (left {13,43,67}, right
+# {27,53,77}), which is what makes the host's table twice the size of theirs.
+# Same six channels, same order, as the original receiver. The weighted /
+# de-phased variants tried during debugging are gone: they changed nothing, and
+# the link problem turned out to be the Gazell library version, not the table.
+channel_table = [13, 27, 43, 53, 67, 77]
+# 0 = "maximum", which is the library default and what the working receiver
+# uses (it never calls nrf_gzll_set_max_tx_attempts at all).
+
+# Host TX power in dBm: 4 | 0 | -4 | -8 | -12 | -16 | -20.
+#
+# This is the power of the ACKs the dongle sends BACK to the halves, not of
+# their data packets (that is the transmitters' own setting, which we cannot
+# change). It still decides whether a half believes its packet got through:
+# the library default is 0 dBm, so the return path is 4 dB weaker than it has
+# to be. A half that misses the ACK retries - felt as delay, and as a lost
+# keystroke once the retries run out.
+
+# A half that has not sent for this long has all its keys released, so a lost
+# final packet cannot leave a key stuck down. The transmitters only send on
+# change, so this must be comfortably longer than the reported interval.
+link_timeout_ms = 500
+
+# How often the received snapshot is turned into key events. 1 ms is the rate
+# the rest of the system runs at; the radio itself is drained in interrupt
+# context, so this only paces the debouncer and event generation.
+poll_ms = 1
+
+# -----------------------------------------------------------------------------
+# Flash storage for the keymap/Vial settings.
+# -----------------------------------------------------------------------------
+[flash]
+# Everything from here upwards belongs to the factory USB bootloader. Verified on
+# this dongle with `nrfutil device fw-info`: bootloader at 0xE0000, size 0x1E000.
+# Storage must not reach into it - losing the bootloader loses the only way to
+# re-flash the dongle without a debug probe.
+reserved_top = 0xE0000
+
+[storage]
+# MUST start at or after the end of the application region declared in memory.x.
+# build.rs checks this and fails the build otherwise: writing storage over live
+# code is the one mistake here that bricks the keyboard in a confusing way.
+start_addr = 0xA0000
+num_sectors = 6
+
+# -----------------------------------------------------------------------------
+# REG1 (main regulator) mode. "keep" = do not touch the register, i.e. inherit
+# whatever the bootloader left. This board's behaviour is already verified with
+# that value, so it is stated rather than changed.
+#
+# Full reasoning in boards/nice-nano-52840.toml: the Adafruit UF2 bootloader
+# switches REG1 to DC/DC, and DC/DC needs an inductor that not every board
+# revision populates. "ldo" forces LDO, "dcdc" forces DC/DC.
+# -----------------------------------------------------------------------------
+[power]
+reg1 = "keep"

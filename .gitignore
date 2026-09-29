@@ -1,0 +1,45 @@
+# ---------------------------------------------------------------------------
+# Build output. `cargo build` regenerates all of it, and target/ on the
+# development machine is well over a gigabyte - firmware does not belong in
+# history. Publish images as Release assets pinned to a tag instead.
+# ---------------------------------------------------------------------------
+target/
+**/target/
+*.hex
+*.uf2
+*.elf
+*.bin
+*.zip
+
+# ---------------------------------------------------------------------------
+# The Gazell archive IS intentionally committed, under vendor/gzll/ : the build
+# needs that one file and nothing else from the nRF5 SDK, and Nordic's licence
+# permits redistributing the binary when license.txt travels with it. There is
+# deliberately no rule touching vendor/ - excluding it would make a fresh clone
+# unbuildable, and re-including a file whose parent directory is excluded is not
+# something git can do.
+# ---------------------------------------------------------------------------
+
+# Local archives that are NOT part of the project: superseded firmware, SDK
+# copies kept for forensics, quarantined experiments from a refactor.
+/reference/
+/_quarantine-*/
+/_tmp-*/
+
+# Python scratch caches from tools/.
+__pycache__/
+*.pyc
+
+# Logs written by the build and comparison scripts.
+*.log
+build.log
+objcopy.log
+
+# PCAP captures from the RF-link investigation.
+*.pcap
+
+# Editor / OS noise.
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

@@ -1,0 +1,89 @@
+# =============================================================================
+#  Board variant: nice!nano (nRF52840, Adafruit UF2 bootloader)
+#
+#  An OVERRIDE file, not a second copy of board.toml. build.rs starts from
+#  board.toml - the single source of truth for the keyboard and the link - and
+#  deep-merges the values below on top (merge_toml in build.rs). Only what
+#  depends on the bootloader belongs here: the matrix, the channel table, the
+#  USB identity and the Vial keyboard ID are inherited and cannot drift.
+#
+#  Build it with:
+#      set BOARD_OVERRIDE=boards\nice-nano-52840.toml
+#      cargo build --release
+#  or just run tools\build-variants.cmd, which does all four boards.
+#
+#  Until 2026-09-29 this file was a 281-line copy of board.toml. That copy had
+#  already drifted: its [flash] comment described the DONGLE's bootloader
+#  ("verified ... at 0xE0000") while its own reserved_top said 0xF4000. The
+#  numbers below are what the previous copy declared, unchanged.
+# =============================================================================
+
+[memory]
+# flash_origin is the FIRST BYTE OF THE APPLICATION SLOT, which depends on the
+# bootloader, not on the chip:
+#   nice!nano / Adafruit UF2 bootloader        : 0x00001000  (this file)
+#   PCA10059 dongle, Nordic USB DFU bootloader : 0x00001000  (same number,
+#                                                different bootloader)
+#   bare chip / no bootloader                  : 0x00000000
+#
+#   ZMK reserves the SoftDevice region and puts the application at 0x00026000 /
+#   0x00027000 instead. Those numbers are NOT interchangeable with these: the
+#   bootloader jumps to ITS OWN application address, so firmware built for the
+#   wrong one is written successfully and then never runs - no error, no USB,
+#   just a board that looks dead. RMK's own nRF52840 + Adafruit bootloader
+#   memory.x uses exactly the numbers below.
+#
+# Stated even though board.toml already says 0x1000: the value is right for both
+# boards here by coincidence, not by rule, and the reason is this file's reason.
+flash_origin = 0x00001000
+flash_length = "636K"
+# RAM starts 8 bytes in, as in RMK's own nRF52840 + Adafruit bootloader memory.x.
+ram_origin = 0x20000008
+ram_length = "255K"
+
+[flash]
+# Everything from here upwards belongs to the factory Adafruit UF2 bootloader:
+# the top 48K of the 1M flash. This is a different number from the dongle's
+# 0xE0000 because a different bootloader occupies a different region - not a
+# contradiction between the two files.
+# Storage must not reach into it - losing the bootloader loses the only way to
+# re-flash this board by dragging a file.
+reserved_top = 0xF4000
+
+[storage]
+# start_addr is inherited from board.toml (0xA0000), and so is the app region
+# that ends exactly there.
+#
+# 32 sectors x 4K = 128K, which is more than this keymap needs (16 layers x 48
+# keys is ~1.5 KB, plus 32 combos and 32 tap dances). It is what the previous
+# copy of this file declared, and a larger region gives sequential-storage more
+# room to garbage-collect - the failure mode of a too-small region is a Vial
+# import that hangs rather than a crash, so the generous size stays.
+num_sectors = 32
+
+# -----------------------------------------------------------------------------
+# Regulator modes. These follow RMK's own chip defaults for nRF52840
+# (rmk/examples/use_config/nrf52840_ble/keyboard.toml):
+#
+#     [chip.nrf52840]
+#     dcdc_reg0 = true
+#     dcdc_reg1 = true
+#     dcdc_reg0_voltage = "3V3"
+#
+# They are stated rather than left to chance because the mode in effect when the
+# application starts is NOT the chip's reset default: the Adafruit UF2 bootloader
+# switches REG1 to DC/DC before jumping into the application, and DC/DC needs the
+# external inductor that not every board revision populates. A firmware that
+# never touches the register inherits a mode it never chose.
+#
+# "keep" = do not touch, "ldo" = force LDO, "dcdc" = force DC/DC. LDO is always
+# safe (it only costs idle current) if a board turns out to lack the inductor.
+# UICR.REGOUT0 (REG0's output voltage) is deliberately not written: RMK notes
+# that changing it needs bootloader >= 0.10.0, and these boards ship 3V3.
+#
+# This is the one section where the nice!nano genuinely differs from the dongle,
+# which runs reg1 = "keep" (board.toml).
+# -----------------------------------------------------------------------------
+[power]
+reg0 = "dcdc"
+reg1 = "dcdc"

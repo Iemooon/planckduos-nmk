@@ -1,0 +1,18 @@
+# Pinned compiler, on purpose.
+#
+# A firmware image should be traceable to the codegen that produced it. "stable"
+# moves every six weeks and changes inlining and layout, so an unpinned toolchain
+# means CI on a runner builds a different binary than the machine the board was
+# flashed and tested from - exactly the comparison you do not want to be guessing
+# about when a keyboard behaves differently after a rebuild.
+#
+# 1.98.1 is the toolchain the four board variants in this repository were built
+# and flashed with; rustc's commit hash from it (48a229cea) is the one that
+# appears in the panic-location strings inside the produced images, which is how
+# the match was checked rather than assumed.
+#
+# GitHub Actions reads this file via `rustup show`, so no workflow step has to
+# name a version and the two cannot drift apart.
+[toolchain]
+channel = "1.98.1"
+components = ["llvm-tools"]

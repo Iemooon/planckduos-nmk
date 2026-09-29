@@ -1,0 +1,19 @@
+[target.'cfg(all(target_arch = "arm", target_os = "none"))']
+# probe-rs is not installed on this machine, so there is no `runner`. The image
+# is flashed over the dongle's factory DFU bootloader instead: build a
+# Secure-DFU .zip from the .bin and program it with nrfutil-device.
+
+# Use flip-link overflow check: https://github.com/knurling-rs/flip-link
+linker = "flip-link"
+
+[build]
+target = "thumbv7em-none-eabihf"     # Cortex-M4F (with FPU)
+
+[env]
+DEFMT_LOG = "debug"
+# rmk-types' build script turns the behaviour capacities in keyboard.toml into
+# compile-time constants (COMBO_MAX_NUM, MORSE_MAX_NUM, ...). `relative = true`
+# resolves the path against THIS file's directory, i.e. the project root - the
+# same spelling RMK's own examples use. Without it RMK silently uses its
+# defaults (8 combos, 8 morse entries).
+KEYBOARD_TOML_PATH = { value = "keyboard.toml", relative = true }

@@ -1,0 +1,65 @@
+# =============================================================================
+#  Board variant: nice!nano on nRF52833 (Adafruit UF2 bootloader)
+#
+#  An OVERRIDE file, not a second copy of board.toml - see the header of
+#  boards\nice-nano-52840.toml for what that means and why. Everything about the
+#  keyboard and the link is inherited: [matrix], [gazell], [device] and the Vial
+#  keyboard ID all come from board.toml untouched.
+#
+#  Build it with:
+#      set BOARD_OVERRIDE=boards\nice-nano-52833.toml
+#      cargo build --release --no-default-features --features nrf52833
+#  or just run tools\build-variants.cmd, which does all four boards.
+# =============================================================================
+
+[chip]
+# Must match the cargo feature this variant is built with; build.rs cross-checks
+# the two, and checks the sizes below against the chip's real flash/RAM (512K/128K
+# here, against the 52840's 1M/256K).
+name = "nrf52833"
+
+[memory]
+# flash_origin is the FIRST BYTE OF THE APPLICATION SLOT, which depends on the
+# bootloader, not on the chip:
+#   PCA10059 dongle, Nordic USB DFU bootloader : 0x00001000
+#   nice!nano 52840, Adafruit UF2, no SD       : 0x00001000
+#   nice!nano 52833 (this board), SD reserved  : 0x00027000  (measured)
+#   bare chip / no bootloader                  : 0x00000000
+#
+# This is the one board of the four whose application slot is NOT at 0x1000, and
+# the one where a wrong value is invisible until the board does not boot.
+flash_origin = 0x00027000
+# 260K ends at 0x68000, leaving 48K of storage and the 48K bootloader region
+# below the top of the 512K flash.
+flash_length = "260K"
+# Unlike the nRF52840 boards, RAM starts at 0 - there is no bootloader-reserved
+# 8-byte prefix on this chip's Adafruit build.
+ram_origin = 0x20000000
+ram_length = "128K"
+
+[flash]
+# Everything from here upwards belongs to the factory Adafruit UF2 bootloader.
+# NOT measured on this board: derived as the top 48K of 512K, the same 48K the
+# bootloader occupies on the nRF52840 nice!nano (0xF4000 of 1M). Confirm with
+#     nrfutil device fw-info --serial-number <sn>
+# and read `imageLocation.address` before relying on it.
+# Storage must not reach into it - losing the bootloader loses the only way to
+# re-flash without a debug probe.
+reserved_top = 0x74000
+
+[storage]
+# MUST start at or after the end of the application region declared in memory.x.
+# build.rs checks this and fails the build otherwise: writing storage over live
+# code is the one mistake here that bricks the keyboard in a confusing way.
+#
+# 12 sectors x 4K = 48K. Deliberately NOT the 2 sectors this profile used to
+# carry: RMK stores into sequential-storage, whose GC needs a spare page to move
+# live data into, and every one of RMK's own examples uses at least 6 sectors.
+# At 2 the write path can wedge, which is what "Vial import hangs" looked like.
+start_addr = 0x68000
+num_sectors = 12
+
+# [power] is inherited: reg1 = "keep", as in board.toml. This board is a UF2
+# board like the 52840 nice!nano, so if it ever shows the same regulator
+# question, that file's reasoning applies - but "keep" is what this profile was
+# built and tested with, so it is left alone rather than changed for symmetry.
