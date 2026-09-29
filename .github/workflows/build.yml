@@ -1,0 +1,141 @@
+name: build
+
+# What this proves: that a clone of this repository, on a machine that has never
+# seen the developer's nRF5 SDK checkout or QMK_MSYS install, produces these
+# firmwares. Everything the build needs comes from the repository - including the
+# one closed-source archive, vendored under vendor/gzll - plus public packages.
+# The compiler version is pinned by rust-toolchain.toml rather than drifting with
+# whatever `stable` the runner happens to ship, because a moving toolchain changes
+# codegen and therefore changes the artifact you are trying to trace.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same ref makes the older run pointless.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ------------------------------------------------------------- firmware ------
+  # All four boards, from one source tree. Needs a C compiler for a reason that
+  # is easy to miss: this receiver links rmk with `adafruit_bl` (the software
+  # bootloader-jump feature), which pulls in rmk's BLE/crypto path, and
+  # p256-cortex-m4-sys shells out to arm-none-eabi-gcc while it builds. Without
+  # that tool the build script dies with "failed to find tool arm-none-eabi-gcc"
+  # long before anything looks BLE-related.
+  firmware:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install arm-none-eabi-gcc
+        run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi
+
+      # Reads rust-toolchain.toml and installs that compiler. Deliberately not an
+      # "install stable" action: stable moves, and the pinned version is the one
+      # the flashed boards were built with.
+      - name: Activate the pinned toolchain
+        run: rustup show
+
+      - name: Install the ARM target
+        run: rustup target add thumbv7em-none-eabihf
+
+      # At the versions the project is developed against. .cargo/config.toml
+      # names flip-link as the linker for the arm-none targets, so flip-link is
+      # not optional; cargo-binutils provides the objcopy used below.
+      - name: Install cargo tools
+        run: |
+          cargo install --locked cargo-binutils@0.4.0
+          cargo install --locked cargo-hex-to-uf2@0.1.2
+          cargo install --locked flip-link@0.1.12
+
+      # The four boards differ ONLY in bootloader/flash layout, which is a
+      # boards/*.toml override merged onto board.toml by build.rs. The matrix
+      # geometry, the radio parameters and the USB identity are inherited, so
+      # they cannot drift between boards. This mirrors tools/build-variants.cmd
+      # rather than inventing a second scheme - if the two ever disagree, the
+      # local script is the one a contributor runs.
+
+      - name: Build 52840-dongle (PCA10059, no override)
+        run: |
+          cargo build --release
+          cargo objcopy --release -- -O ihex gazell-dongle-52840-dongle.hex
+
+      - name: Build nicenano-52840
+        env:
+          BOARD_OVERRIDE: boards/nice-nano-52840.toml
+        run: |
+          cargo build --release
+          cargo objcopy --release -- -O ihex gazell-dongle-nicenano-52840.hex
+          cargo hex-to-uf2 --input-path gazell-dongle-nicenano-52840.hex \
+                           --output-path gazell-dongle-nicenano-52840.uf2 --family nrf52840
+
+      - name: Build 52833-dk (PCA10100, no bootloader, SWD only)
+        run: |
+          cargo build --release --no-default-features --features nrf52833
+          cargo objcopy --release --no-default-features --features nrf52833 \
+                        -- -O ihex gazell-dongle-52833-dk.hex
+
+      - name: Build nicenano-52833
+        env:
+          BOARD_OVERRIDE: boards/nice-nano-52833.toml
+        run: |
+          cargo build --release --no-default-features --features nrf52833
+          cargo objcopy --release --no-default-features --features nrf52833 \
+                        -- -O ihex gazell-dongle-nicenano-52833.hex
+          cargo hex-to-uf2 --input-path gazell-dongle-nicenano-52833.hex \
+                           --output-path gazell-dongle-nicenano-52833.uf2 --family nrf52833
+
+      # Checks the products against the partition map each one claims: start
+      # address, that the application never reaches storage, that storage never
+      # reaches the bootloader, the UF2 family ID, that each UF2 and its own HEX
+      # cover the same span, and - the assertion that catches a silent no-op
+      # override - that all four images really are distinct.
+      - name: Verify the four variants
+        run: python3 tools/verify_variant.py
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: gazell-dongle-boards
+          path: |
+            gazell-dongle-*.hex
+            gazell-dongle-*.uf2
+          if-no-files-found: error
+
+  # ---------------------------------------------------- vendored archive -------
+  # The closed-source Gazell library is the single most load-bearing file in this
+  # repository - the library VERSION was the last standing variable in the link
+  # quality investigation - so its shape is checked here rather than trusted.
+  # Both scripts parse the ELF archive in pure Python and need no toolchain and
+  # no SDK, which is what makes them runnable on a runner.
+  vendored-archive:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The symbol contract: what the archive leaves UNDEFINED is exactly what
+      # this firmware must provide. If a chip-specific helper (nrf_delay_us,
+      # SystemCoreClock) ever appears in that set, the library's timing behaviour
+      # is only as correct as our implementation of it - and that is a change to
+      # notice, not to discover over the air.
+      - name: Audit the per-member symbol contract
+        run: python3 tools/gzll_syms.py
+
+      # Provenance: the member file set, the baked-in source paths and the GCC
+      # producer string identify which SDK release the archive was cut from.
+      # Catches "somebody replaced the binary" as a fact rather than a suspicion.
+      - name: Record the archive provenance
+        run: python3 tools/gzll_provenance.py
+
+      - name: Confirm the licence travels with the binary
+        run: |
+          test -f vendor/gzll/license.txt
+          test -f vendor/gzll/gzll_nrf52840_gcc.a
+          echo "OK: archive and Nordic notice are both present"
