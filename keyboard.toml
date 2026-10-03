@@ -50,18 +50,20 @@
 # whole threshold out before committing - 20 ms on the leading edge of every key,
 # of which 15 ms duplicated work already done on the other end of the link.
 #
-# What 5 still does: a key whose state changes twice inside the window is held
+# What 3 still does: a key whose state changes twice inside the window is held
 # until the window expires, so contradictory reports cannot become two events.
 # Nothing in this link produces such a burst - Gazell packets are CRC-checked and
 # the half never puts an unstable state on the air - so treat the value as a floor
 # rather than a filter. 0 is legal and makes the lockout a single pass.
+#
+# 2026-10-03: lowered from 5 ms to 3 ms.
 #
 # One companion change that does NOT apply here: in keypoint-nmk, swapping this
 # debouncer out required also making the matrix read indivisible, because a 6-row
 # half reaches `RAW` as two u32 stores and a task can catch the pair half-updated.
 # This board's halves are 4 rows, which pack into ONE word, so a single
 # AtomicU32 store/load is already the whole snapshot - no critical section needed.
-debounce_time = 5
+debounce_time = 3
 
 # Combos. Vial reads this number from the firmware, so raising it is what makes
 # more combo slots appear in Vial's Combo tab.

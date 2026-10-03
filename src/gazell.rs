@@ -251,7 +251,7 @@ pub struct GazellMatrix {
     /// whose state changes twice inside the threshold is held until the window
     /// expires, so contradictory reports cannot become two events. That is the one
     /// failure mode a pre-debounced stream cannot rule out, and it costs nothing on
-    /// the leading edge. The threshold itself is set to 5 in keyboard.toml.
+    /// the leading edge. The threshold itself is set to 3 in keyboard.toml.
     ///
     /// Unlike keypoint-nmk, no indivisible matrix read is needed alongside this
     /// change: a 4-row half packs into ONE u32, so `RAW[slot]` is a single atomic
